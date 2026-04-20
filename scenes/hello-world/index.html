@@ -78,8 +78,27 @@ scene.add(sun);
 scene.add(new THREE.AmbientLight(0xb0d8f0, 0.8));
 
 /* ── Ground ──────────────────────────────── */
-const groundGeo = new THREE.PlaneGeometry(40, 400, 8, 80);
-const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a7c3f });
+const texLoader = new THREE.TextureLoader();
+function loadTex(path, repeat = [12, 120]) {
+  const t = texLoader.load(path);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(...repeat);
+  return t;
+}
+const GROUND_BASE = '../../models/textures/ground/';
+const groundColorTex  = loadTex(GROUND_BASE + 'Grass001_1K_Color.jpg');
+const groundRoughTex  = loadTex(GROUND_BASE + 'Grass001_1K_Roughness.jpg');
+const groundNormalTex = loadTex(GROUND_BASE + 'Grass001_1K_Normal.jpg');
+
+const groundGeo = new THREE.PlaneGeometry(40, 400, 1, 1);
+const groundMat = new THREE.MeshStandardMaterial({
+  map:         groundColorTex,
+  roughnessMap:groundRoughTex,
+  normalMap:   groundNormalTex,
+  normalScale: new THREE.Vector2(1.2, 1.2),
+  roughness:   1.0,
+  metalness:   0.0,
+});
 const ground    = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
