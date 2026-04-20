@@ -309,29 +309,7 @@ async function main() {
     rubies.push({ mesh: gem, alive: true });
   }
 
-  /* ── Particle pool for splashes ──────────── */
-  const PARTICLE_COUNT  = 300;
-  const particleGeo     = new THREE.BufferGeometry();
-  const pPositions      = new Float32Array(PARTICLE_COUNT * 3);
-  const pColors         = new Float32Array(PARTICLE_COUNT * 3);
-  particleGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
-  particleGeo.setAttribute('color',    new THREE.BufferAttribute(pColors, 3));
-  const particleMat = new THREE.PointsMaterial({
-    size:            0.18,
-    sizeAttenuation: true,
-    transparent:     true,
-    opacity:         1.0,
-    depthWrite:      false,
-    vertexColors:    true,
-  });
-  const particles = new THREE.Points(particleGeo, particleMat);
-  particles.visible = false;
-  scene.add(particles);
-
-  const pVel = Array.from({ length: PARTICLE_COUNT }, () => new THREE.Vector3());
-  let   pLife     = 0;
-  const P_DURATION = 2.0;
-
+  /* ── Particle splashes ───────────────────── */
   // Palette of ruby-burst colours: deep reds, hot pinks, gold sparks, white glints
   const RUBY_PALETTE = [
     [1.0, 0.05, 0.15],
@@ -344,6 +322,10 @@ async function main() {
     [1.0, 0.3,  0.5 ],
   ];
 
+  const activeSplashes = [];   // { points, mat, geo, pPos, pVel, life }
+  const PARTICLE_COUNT = 300;
+  const P_DURATION     = 2.0;
+
   function splashRuby() {
     // Find closest alive ruby — no distance limit
     let best = null, bestDist = Infinity;
@@ -354,15 +336,21 @@ async function main() {
     }
     if (!best) return;
 
-    const origin = best.mesh.position;
+    const origin = best.mesh.position.clone();
+    scene.remove(best.mesh);
+    best.alive = false;
+
+    // Build a fresh Points object for this splash
+    const pPos  = new Float32Array(PARTICLE_COUNT * 3);
+    const pCol  = new Float32Array(PARTICLE_COUNT * 3);
+    const pVel  = Array.from({ length: PARTICLE_COUNT }, () => new THREE.Vector3());
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
-      pPositions[i * 3]     = origin.x;
-      pPositions[i * 3 + 1] = origin.y;
-      pPositions[i * 3 + 2] = origin.z;
+      pPos[i * 3]     = origin.x;
+      pPos[i * 3 + 1] = origin.y;
+      pPos[i * 3 + 2] = origin.z;
 
-      // Mix of tight core burst and wide sparks
-      const fast = Math.random() < 0.3;
+      const fast  = Math.random() < 0.3;
       const speed = fast ? 10 + Math.random() * 8 : 3 + Math.random() * 6;
       const theta = Math.random() * Math.PI * 2;
       const phi   = Math.random() * Math.PI;
@@ -373,21 +361,30 @@ async function main() {
       );
 
       const col = RUBY_PALETTE[Math.floor(Math.random() * RUBY_PALETTE.length)];
-      pColors[i * 3]     = col[0];
-      pColors[i * 3 + 1] = col[1];
-      pColors[i * 3 + 2] = col[2];
+      pCol[i * 3]     = col[0];
+      pCol[i * 3 + 1] = col[1];
+      pCol[i * 3 + 2] = col[2];
     }
-    particleGeo.attributes.position.needsUpdate = true;
-    particleGeo.attributes.color.needsUpdate    = true;
-    particles.visible   = true;
-    particleMat.opacity = 1.0;
-    pLife = P_DURATION;
 
-    scene.remove(best.mesh);
-    best.alive = false;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+    geo.setAttribute('color',    new THREE.BufferAttribute(pCol, 3));
+
+    const mat = new THREE.PointsMaterial({
+      size: 0.18, sizeAttenuation: true,
+      transparent: true, opacity: 1.0,
+      depthWrite: false, vertexColors: true,
+    });
+
+    const pts = new THREE.Points(geo, mat);
+    scene.add(pts);
+    activeSplashes.push({ points: pts, mat, geo, pPos, pVel, life: P_DURATION });
   }
 
   function onKeyDown(e) {
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key)) {
+      e.preventDefault();
+    }
     if (e.key === 'ArrowLeft')  spawnRuby(-1);
     if (e.key === 'ArrowRight') spawnRuby(1);
     if (e.key === ' ')          splashRuby();
@@ -425,18 +422,24 @@ async function main() {
       r.mesh.position.y = 0.3 + Math.sin(Date.now() * 0.002 + r.mesh.position.x) * 0.12;
     }
 
-    // Animate splash particles
-    if (pLife > 0) {
-      pLife -= dt;
-      const t = 1 - pLife / P_DURATION;
-      particleMat.opacity = Math.max(0, 1 - t * t * 1.5);
+    // Animate all active splashes
+    for (let s = activeSplashes.length - 1; s >= 0; s--) {
+      const sp = activeSplashes[s];
+      sp.life -= dt;
+      const t = 1 - sp.life / P_DURATION;
+      sp.mat.opacity = Math.max(0, 1 - t * t * 1.5);
       for (let i = 0; i < PARTICLE_COUNT; i++) {
-        pPositions[i * 3]     += pVel[i].x * dt;
-        pPositions[i * 3 + 1] += (pVel[i].y - 9.8 * t * 1.2) * dt; // gravity
-        pPositions[i * 3 + 2] += pVel[i].z * dt;
+        sp.pPos[i * 3]     += sp.pVel[i].x * dt;
+        sp.pPos[i * 3 + 1] += (sp.pVel[i].y - 9.8 * t * 1.2) * dt;
+        sp.pPos[i * 3 + 2] += sp.pVel[i].z * dt;
       }
-      particleGeo.attributes.position.needsUpdate = true;
-      if (pLife <= 0) particles.visible = false;
+      sp.geo.attributes.position.needsUpdate = true;
+      if (sp.life <= 0) {
+        scene.remove(sp.points);
+        sp.geo.dispose();
+        sp.mat.dispose();
+        activeSplashes.splice(s, 1);
+      }
     }
 
     // Wrap tree pool
