@@ -41,7 +41,7 @@
 </head>
 <body>
   <div id="loading">Loading forest…</div>
-  <div id="hint">↑ / ↓ — walk forward / backward</div>
+  <div id="hint">↑ / ↓ walk &nbsp;·&nbsp; ← / → spawn ruby &nbsp;·&nbsp; Space splash</div>
 
   <script type="importmap">
   {
@@ -277,11 +277,98 @@ async function main() {
 
   /* ── Input ───────────────────────────────── */
   const keys = {};
-  window.addEventListener('keydown', e => keys[e.key] = true);
+  window.addEventListener('keydown', e => { keys[e.key] = true; onKeyDown(e); });
   window.addEventListener('keyup',   e => keys[e.key] = false);
 
   let hintFaded = false;
   const hint = document.getElementById('hint');
+
+  /* ── Ruby gems ───────────────────────────── */
+  const rubyMat = new THREE.MeshPhysicalMaterial({
+    color:        0xcc0022,
+    emissive:     0x440008,
+    roughness:    0.05,
+    metalness:    0.0,
+    transmission: 0.5,
+    thickness:    0.5,
+    reflectivity: 1.0,
+    clearcoat:    1.0,
+    clearcoatRoughness: 0.05,
+  });
+  const rubyGeo = new THREE.OctahedronGeometry(0.28, 0);
+
+  const rubies = [];   // { mesh, alive }
+
+  function spawnRuby(side) {
+    const x   = side * (2.0 + Math.random() * 0.8);  // just off path edge
+    const z   = camZ - 18;                             // ahead in fog
+    const gem = new THREE.Mesh(rubyGeo, rubyMat);
+    gem.position.set(x, 0.3, z);
+    gem.rotation.set(Math.random(), Math.random(), Math.random());
+    scene.add(gem);
+    rubies.push({ mesh: gem, alive: true });
+  }
+
+  /* ── Particle pool for splashes ──────────── */
+  const PARTICLE_COUNT  = 120;
+  const particleGeo     = new THREE.BufferGeometry();
+  const pPositions      = new Float32Array(PARTICLE_COUNT * 3);
+  particleGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+  const particleMat = new THREE.PointsMaterial({
+    color:       0xff2244,
+    size:        0.12,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity:     1.0,
+    depthWrite:  false,
+  });
+  const particles = new THREE.Points(particleGeo, particleMat);
+  particles.visible = false;
+  scene.add(particles);
+
+  // Each particle: velocity + lifetime
+  const pVel = Array.from({ length: PARTICLE_COUNT }, () => new THREE.Vector3());
+  let   pLife  = 0;   // countdown in seconds; 0 = inactive
+  const P_DURATION = 1.4;
+
+  function splashRuby() {
+    // Find closest alive ruby within 8 units
+    let best = null, bestDist = Infinity;
+    for (const r of rubies) {
+      if (!r.alive) continue;
+      const d = Math.abs(r.mesh.position.z - camZ);
+      if (d < 8 && d < bestDist) { best = r; bestDist = d; }
+    }
+    if (!best) return;
+
+    const origin = best.mesh.position;
+
+    // Initialise particles at ruby origin with random burst velocities
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      pPositions[i * 3]     = origin.x;
+      pPositions[i * 3 + 1] = origin.y;
+      pPositions[i * 3 + 2] = origin.z;
+      pVel[i].set(
+        (Math.random() - 0.5) * 6,
+        Math.random() * 7 + 1,
+        (Math.random() - 0.5) * 6
+      );
+    }
+    particleGeo.attributes.position.needsUpdate = true;
+    particles.visible  = true;
+    particleMat.opacity = 1.0;
+    pLife = P_DURATION;
+
+    // Remove ruby
+    scene.remove(best.mesh);
+    best.alive = false;
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'ArrowLeft')  spawnRuby(-1);
+    if (e.key === 'ArrowRight') spawnRuby(1);
+    if (e.key === ' ')          splashRuby();
+  }
 
   /* ── Animation loop ──────────────────────── */
   const SPEED = 5;
@@ -306,6 +393,29 @@ async function main() {
 
     camera.position.z = camZ;
 
+    // Spin rubies gently
+    for (const r of rubies) {
+      if (!r.alive) continue;
+      r.mesh.rotation.y += dt * 1.8;
+      r.mesh.rotation.x += dt * 0.6;
+      // bob up and down
+      r.mesh.position.y = 0.3 + Math.sin(Date.now() * 0.002 + r.mesh.position.x) * 0.12;
+    }
+
+    // Animate splash particles
+    if (pLife > 0) {
+      pLife -= dt;
+      const t = 1 - pLife / P_DURATION;
+      particleMat.opacity = Math.max(0, 1 - t * t * 1.5);
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        pPositions[i * 3]     += pVel[i].x * dt;
+        pPositions[i * 3 + 1] += (pVel[i].y - 9.8 * t * 1.2) * dt; // gravity
+        pPositions[i * 3 + 2] += pVel[i].z * dt;
+      }
+      particleGeo.attributes.position.needsUpdate = true;
+      if (pLife <= 0) particles.visible = false;
+    }
+
     // Wrap tree pool
     for (const tree of treePool) {
       const rel = tree.position.z - camZ;
@@ -317,7 +427,6 @@ async function main() {
     for (const cloud of clouds) {
       cloud.position.x += 0.5 * dt;
       if (cloud.position.x > 60) cloud.position.x = -60;
-      // wrap clouds along Z relative to camera
       const relZ = cloud.position.z - camZ;
       if (relZ > 1000) cloud.position.z -= 2000;
       if (relZ < -1000) cloud.position.z += 2000;
