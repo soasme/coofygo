@@ -79,7 +79,7 @@ scene.add(new THREE.AmbientLight(0xb0d8f0, 0.8));
 
 /* ── Ground ──────────────────────────────── */
 const texLoader = new THREE.TextureLoader();
-function loadTex(path, repeat = [12, 120]) {
+function loadTex(path, repeat = [12, 600]) {
   const t = texLoader.load(path);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(...repeat);
@@ -148,7 +148,7 @@ for (let i = 0; i < 120; i++) {
 const pathTex = new THREE.CanvasTexture(pathCanvas);
 pathTex.wrapS = THREE.RepeatWrapping;
 pathTex.wrapT = THREE.RepeatWrapping;
-pathTex.repeat.set(1, 40);   // tile vertically along the road length
+pathTex.repeat.set(1, 3000);   // 1 tile per ~3 units along path length
 
 const pathGeo = new THREE.PlaneGeometry(3.2, 10000, 1, 1);
 const pathMat = new THREE.MeshStandardMaterial({
