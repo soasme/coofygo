@@ -300,7 +300,7 @@ async function main() {
   const rubies = [];   // { mesh, alive }
 
   function spawnRuby(side) {
-    const x   = side * (2.0 + Math.random() * 0.8);  // just off path edge
+    const x   = side * (1.8 + Math.random() * 0.4);  // close to path edge
     const z   = camZ - 18;                             // ahead in fog
     const gem = new THREE.Mesh(rubyGeo, rubyMat);
     gem.position.set(x, 0.3, z);
@@ -310,56 +310,79 @@ async function main() {
   }
 
   /* ── Particle pool for splashes ──────────── */
-  const PARTICLE_COUNT  = 120;
+  const PARTICLE_COUNT  = 300;
   const particleGeo     = new THREE.BufferGeometry();
   const pPositions      = new Float32Array(PARTICLE_COUNT * 3);
+  const pColors         = new Float32Array(PARTICLE_COUNT * 3);
   particleGeo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+  particleGeo.setAttribute('color',    new THREE.BufferAttribute(pColors, 3));
   const particleMat = new THREE.PointsMaterial({
-    color:       0xff2244,
-    size:        0.12,
+    size:            0.18,
     sizeAttenuation: true,
-    transparent: true,
-    opacity:     1.0,
-    depthWrite:  false,
+    transparent:     true,
+    opacity:         1.0,
+    depthWrite:      false,
+    vertexColors:    true,
   });
   const particles = new THREE.Points(particleGeo, particleMat);
   particles.visible = false;
   scene.add(particles);
 
-  // Each particle: velocity + lifetime
   const pVel = Array.from({ length: PARTICLE_COUNT }, () => new THREE.Vector3());
-  let   pLife  = 0;   // countdown in seconds; 0 = inactive
-  const P_DURATION = 1.4;
+  let   pLife     = 0;
+  const P_DURATION = 2.0;
+
+  // Palette of ruby-burst colours: deep reds, hot pinks, gold sparks, white glints
+  const RUBY_PALETTE = [
+    [1.0, 0.05, 0.15],
+    [1.0, 0.2,  0.3 ],
+    [0.9, 0.0,  0.05],
+    [1.0, 0.55, 0.1 ],
+    [1.0, 0.85, 0.2 ],
+    [1.0, 1.0,  1.0 ],
+    [0.7, 0.0,  0.2 ],
+    [1.0, 0.3,  0.5 ],
+  ];
 
   function splashRuby() {
-    // Find closest alive ruby within 8 units
+    // Find closest alive ruby — no distance limit
     let best = null, bestDist = Infinity;
     for (const r of rubies) {
       if (!r.alive) continue;
       const d = Math.abs(r.mesh.position.z - camZ);
-      if (d < 8 && d < bestDist) { best = r; bestDist = d; }
+      if (d < bestDist) { best = r; bestDist = d; }
     }
     if (!best) return;
 
     const origin = best.mesh.position;
 
-    // Initialise particles at ruby origin with random burst velocities
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       pPositions[i * 3]     = origin.x;
       pPositions[i * 3 + 1] = origin.y;
       pPositions[i * 3 + 2] = origin.z;
+
+      // Mix of tight core burst and wide sparks
+      const fast = Math.random() < 0.3;
+      const speed = fast ? 10 + Math.random() * 8 : 3 + Math.random() * 6;
+      const theta = Math.random() * Math.PI * 2;
+      const phi   = Math.random() * Math.PI;
       pVel[i].set(
-        (Math.random() - 0.5) * 6,
-        Math.random() * 7 + 1,
-        (Math.random() - 0.5) * 6
+        Math.sin(phi) * Math.cos(theta) * speed,
+        Math.abs(Math.cos(phi)) * speed * 1.2 + Math.random() * 3,
+        Math.sin(phi) * Math.sin(theta) * speed
       );
+
+      const col = RUBY_PALETTE[Math.floor(Math.random() * RUBY_PALETTE.length)];
+      pColors[i * 3]     = col[0];
+      pColors[i * 3 + 1] = col[1];
+      pColors[i * 3 + 2] = col[2];
     }
     particleGeo.attributes.position.needsUpdate = true;
-    particles.visible  = true;
+    particleGeo.attributes.color.needsUpdate    = true;
+    particles.visible   = true;
     particleMat.opacity = 1.0;
     pLife = P_DURATION;
 
-    // Remove ruby
     scene.remove(best.mesh);
     best.alive = false;
   }
