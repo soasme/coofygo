@@ -1,0 +1,3 @@
+*.glb !text !filter !merge !diff
+*.gltf !text !filter !merge !diff
+*.bin !text !filter !merge !diff
