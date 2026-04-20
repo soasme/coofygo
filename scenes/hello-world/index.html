@@ -90,7 +90,7 @@ const groundColorTex  = loadTex(GROUND_BASE + 'Grass001_1K_Color.jpg');
 const groundRoughTex  = loadTex(GROUND_BASE + 'Grass001_1K_Roughness.jpg');
 const groundNormalTex = loadTex(GROUND_BASE + 'Grass001_1K_Normal.jpg');
 
-const groundGeo = new THREE.PlaneGeometry(200, 400, 1, 1);
+const groundGeo = new THREE.PlaneGeometry(200, 10000, 1, 1);
 const groundMat = new THREE.MeshStandardMaterial({
   map:         groundColorTex,
   roughnessMap:groundRoughTex,
@@ -150,7 +150,7 @@ pathTex.wrapS = THREE.RepeatWrapping;
 pathTex.wrapT = THREE.RepeatWrapping;
 pathTex.repeat.set(1, 40);   // tile vertically along the road length
 
-const pathGeo = new THREE.PlaneGeometry(3.2, 400, 1, 1);
+const pathGeo = new THREE.PlaneGeometry(3.2, 10000, 1, 1);
 const pathMat = new THREE.MeshStandardMaterial({
   map:          pathTex,
   roughness:    0.92,
@@ -305,10 +305,6 @@ async function main() {
     if (keys['ArrowDown'] || keys['s'] || keys['S']) camZ += SPEED * dt;
 
     camera.position.z = camZ;
-
-    // Slide ground and path with the camera so they're always underfoot
-    ground.position.z = camZ;
-    path.position.z   = camZ;
 
     // Wrap tree pool
     for (const tree of treePool) {
