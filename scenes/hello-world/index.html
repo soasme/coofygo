@@ -306,6 +306,10 @@ async function main() {
 
     camera.position.z = camZ;
 
+    // Slide ground and path with the camera so they're always underfoot
+    ground.position.z = camZ;
+    path.position.z   = camZ;
+
     // Wrap tree pool
     for (const tree of treePool) {
       const rel = tree.position.z - camZ;
