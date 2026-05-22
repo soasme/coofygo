@@ -317,73 +317,323 @@ const GRASS_FRAG = /* glsl */`
   }
 `;
 
-/* ── Rock system ─────────────────────────────────────────────────────────
-   Procedural rocks: deformed IcosahedronGeometry, mossy-stone material.
-   ~3 rocks per tree, scattered in the grass radius. Wraps with the tree pool.
+/* ── Rock system (ported from Erkaman/gl-rock, MIT) ──────────────────────
+   Algorithm:
+   1. Start from a SphereGeometry (stacks×slices)
+   2. Build vertex adjacency from index buffer
+   3. Randomly "scrape" flat faces via flood-fill plane projection
+   4. Apply Perlin noise displacement
+   5. ShaderMaterial: FBM + ridge noise for crack/colour texture
 ──────────────────────────────────────────────────────────────────────── */
-const ROCKS_PER_TREE = 3;
-const rockPool = [];   // { mesh, treeIdx, localX, localZ }
 
-function makeRockMaterial() {
-  // Toon-ish stone: grey with a mossy green tint on upward faces
-  return new THREE.MeshStandardMaterial({
-    color    : 0x8a8070,
-    roughness: 0.92,
-    metalness: 0.0,
-    envMapIntensity: 0.0,
-  });
+/* — 3D value noise (for CPU-side mesh displacement) — */
+function hash3(x, y, z) {
+  let n = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+function fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+function lerp(a, b, t) { return a + t * (b - a); }
+function perlin3(x, y, z) {
+  const ix = Math.floor(x), iy = Math.floor(y), iz = Math.floor(z);
+  const fx = x - ix,       fy = y - iy,       fz = z - iz;
+  const ux = fade(fx), uy = fade(fy), uz = fade(fz);
+  const v000 = hash3(ix,   iy,   iz  )*2-1, v100 = hash3(ix+1, iy,   iz  )*2-1;
+  const v010 = hash3(ix,   iy+1, iz  )*2-1, v110 = hash3(ix+1, iy+1, iz  )*2-1;
+  const v001 = hash3(ix,   iy,   iz+1)*2-1, v101 = hash3(ix+1, iy,   iz+1)*2-1;
+  const v011 = hash3(ix,   iy+1, iz+1)*2-1, v111 = hash3(ix+1, iy+1, iz+1)*2-1;
+  return lerp(lerp(lerp(v000,v100,ux), lerp(v010,v110,ux), uy),
+              lerp(lerp(v001,v101,ux), lerp(v011,v111,ux), uy), uz);
 }
 
-function makeRockGeometry(seed) {
-  // IcosahedronGeometry subdivided twice, then vertices perturbed by pseudo-random noise
-  const geo = new THREE.IcosahedronGeometry(1, 1);
-  const pos = geo.attributes.position;
-  const arr = pos.array;
-  // Per-vertex noise using a simple deterministic hash from seed + index
-  for (let i = 0; i < pos.count; i++) {
-    const x = arr[i*3], y = arr[i*3+1], z = arr[i*3+2];
-    // Hash using sin chaos
-    const h = Math.sin(seed * 127.1 + i * 311.7) * 43758.5453;
-    const noise = (h - Math.floor(h)) * 0.45 - 0.22;
-    const r = Math.sqrt(x*x + y*y + z*z) + noise;
-    const nx = x/Math.sqrt(x*x+y*y+z*z) * r;
-    const ny = y/Math.sqrt(x*x+y*y+z*z) * r;
-    const nz = z/Math.sqrt(x*x+y*y+z*z) * r;
-    arr[i*3] = nx; arr[i*3+1] = ny; arr[i*3+2] = nz;
+/* — Build vertex adjacency from indexed buffer geometry — */
+function buildAdjacency(positions, indices) {
+  const adj = Array.from({ length: positions.length / 3 }, () => new Set());
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i], b = indices[i+1], c = indices[i+2];
+    adj[a].add(b); adj[a].add(c);
+    adj[b].add(a); adj[b].add(c);
+    adj[c].add(a); adj[c].add(b);
   }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
+  return adj.map(s => Array.from(s));
+}
+
+/* — Scrape: flood-fill plane projection (creates flat rock facets) — */
+function scrapeRock(posArr, normArr, adjList, strength, radius) {
+  const N = posArr.length / 3;
+  const start = Math.floor(Math.random() * N);
+  // plane normal = normal at start vertex
+  const nx = normArr[start*3], ny = normArr[start*3+1], nz = normArr[start*3+2];
+  // r0 = start pos shifted inward by strength
+  const r0x = posArr[start*3]   + nx * (-strength);
+  const r0y = posArr[start*3+1] + ny * (-strength);
+  const r0z = posArr[start*3+2] + nz * (-strength);
+  const r2 = radius * radius;
+  const visited = new Uint8Array(N);
+  const stack = [start];
+  while (stack.length) {
+    const idx = stack.pop();
+    if (visited[idx]) continue;
+    visited[idx] = 1;
+    const px = posArr[idx*3], py = posArr[idx*3+1], pz = posArr[idx*3+2];
+    // project onto plane: t = dot(n, r0-p)/dot(n,n)
+    const t = nx*(r0x-px) + ny*(r0y-py) + nz*(r0z-pz); // dot(n,n)=1 since normals are unit
+    const qx = px + nx*t, qy = py + ny*t, qz = pz + nz*t;
+    const dx = qx-r0x, dy = qy-r0y, dz = qz-r0z;
+    if (dx*dx + dy*dy + dz*dz < r2) {
+      posArr[idx*3] = qx; posArr[idx*3+1] = qy; posArr[idx*3+2] = qz;
+      normArr[idx*3] = nx; normArr[idx*3+1] = ny; normArr[idx*3+2] = nz;
+      for (const nb of adjList[idx]) if (!visited[nb]) stack.push(nb);
+    }
+  }
+}
+
+/* — Full rock geometry generator — */
+function createRockGeometry(seed) {
+  const rng = (() => {
+    let s = seed * 9301 + 49297;
+    return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  })();
+
+  // Build sphere as flat arrays
+  const STACKS = 18, SLICES = 18;
+  const posArr  = [];
+  const normArr = [];
+  const uvArr   = [];
+  const idxArr  = [];
+
+  for (let st = 0; st <= STACKS; st++) {
+    const phi = (st / STACKS) * Math.PI;
+    for (let sl = 0; sl <= SLICES; sl++) {
+      const theta = (sl / SLICES) * Math.PI * 2;
+      const x = Math.sin(phi) * Math.cos(theta);
+      const y = Math.cos(phi);
+      const z = Math.sin(phi) * Math.sin(theta);
+      posArr.push(x, y, z);
+      normArr.push(x, y, z);
+      uvArr.push(sl/SLICES, st/STACKS);
+    }
+  }
+  for (let st = 0; st < STACKS; st++) {
+    for (let sl = 0; sl < SLICES; sl++) {
+      const a = st*(SLICES+1)+sl, b = a+1, c = a+(SLICES+1), d = c+1;
+      idxArr.push(a, b, c,  b, d, c);
+    }
+  }
+
+  // Build adjacency
+  const adjList = buildAdjacency(posArr, idxArr);
+
+  // Normalise normals (already unit on sphere, but keep for after scraping)
+  // Apply scraping: 5-10 times
+  const scrapeCount    = 5 + Math.floor(rng() * 6);
+  const scrapeStrength = 0.15 + rng() * 0.25;
+  const scrapeRadius   = 0.25 + rng() * 0.25;
+  for (let s = 0; s < scrapeCount; s++) scrapeRock(posArr, normArr, adjList, scrapeStrength, scrapeRadius);
+
+  // Apply Perlin noise displacement
+  const noiseScale    = 1.5 + rng() * 2.5;
+  const noiseStrength = 0.08 + rng() * 0.14;
+  for (let i = 0, n = posArr.length/3; i < n; i++) {
+    const noise = perlin3(
+      noiseScale * posArr[i*3],
+      noiseScale * posArr[i*3+1],
+      noiseScale * posArr[i*3+2]
+    ) * noiseStrength;
+    posArr[i*3]   += noise;
+    posArr[i*3+1] += noise;
+    posArr[i*3+2] += noise;
+  }
+
+  // Non-uniform scale for squashed/elongated look
+  const sx = 0.9 + rng() * 0.4, sy = 0.55 + rng() * 0.35, sz = 0.85 + rng() * 0.4;
+  for (let i = 0, n = posArr.length/3; i < n; i++) {
+    posArr[i*3] *= sx; posArr[i*3+1] *= sy; posArr[i*3+2] *= sz;
+  }
+
+  // Recompute normals from faces
+  const reNorm = new Float32Array(posArr.length);
+  for (let i = 0; i < idxArr.length; i += 3) {
+    const ai = idxArr[i]*3, bi = idxArr[i+1]*3, ci = idxArr[i+2]*3;
+    const ax = posArr[ai], ay = posArr[ai+1], az = posArr[ai+2];
+    const bx = posArr[bi], by = posArr[bi+1], bz = posArr[bi+2];
+    const cx = posArr[ci], cy = posArr[ci+1], cz = posArr[ci+2];
+    const ex = bx-ax, ey = by-ay, ez = bz-az;
+    const fx = cx-ax, fy = cy-ay, fz = cz-az;
+    const nx2 = ey*fz-ez*fy, ny2 = ez*fx-ex*fz, nz2 = ex*fy-ey*fx;
+    for (const vi of [ai, bi, ci]) { reNorm[vi]+=nx2; reNorm[vi+1]+=ny2; reNorm[vi+2]+=nz2; }
+  }
+  for (let i = 0; i < reNorm.length; i += 3) {
+    const l = Math.sqrt(reNorm[i]*reNorm[i]+reNorm[i+1]*reNorm[i+1]+reNorm[i+2]*reNorm[i+2]) || 1;
+    reNorm[i]/=l; reNorm[i+1]/=l; reNorm[i+2]/=l;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(posArr), 3));
+  geo.setAttribute('normal',   new THREE.BufferAttribute(reNorm, 3));
+  geo.setAttribute('uv',       new THREE.BufferAttribute(new Float32Array(uvArr), 2));
+  geo.setIndex(idxArr);
   return geo;
 }
 
-// Build 5 prototype rock geometries, reused via clone
-const ROCK_PROTOS = Array.from({ length: 5 }, (_, i) => makeRockGeometry(i + 1));
-const ROCK_MAT = makeRockMaterial();
+/* — GLSL 3D simplex noise — */
+const SNOISE3_GLSL = /* glsl */`
+vec4 _s3_permute(vec4 x){return mod(((x*34.0)+1.0)*x,289.0);}
+vec4 _s3_taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+float snoise3(vec3 v){
+  const vec2 C=vec2(1.0/6.0,1.0/3.0);
+  const vec4 D=vec4(0.0,0.5,1.0,2.0);
+  vec3 i=floor(v+dot(v,C.yyy));
+  vec3 x0=v-i+dot(i,C.xxx);
+  vec3 g=step(x0.yzx,x0.xyz);
+  vec3 l=1.0-g;
+  vec3 i1=min(g.xyz,l.zxy);
+  vec3 i2=max(g.xyz,l.zxy);
+  vec3 x1=x0-i1+C.xxx;
+  vec3 x2=x0-i2+C.yyy;
+  vec3 x3=x0-D.yyy;
+  i=mod(i,289.0);
+  vec4 p=_s3_permute(_s3_permute(_s3_permute(i.z+vec4(0.0,i1.z,i2.z,1.0))+i.y+vec4(0.0,i1.y,i2.y,1.0))+i.x+vec4(0.0,i1.x,i2.x,1.0));
+  float n_=0.142857142857;
+  vec3 ns=n_*D.wyz-D.xzx;
+  vec4 j=p-49.0*floor(p*ns.z*ns.z);
+  vec4 x_=floor(j*ns.z);
+  vec4 y_=floor(j-7.0*x_);
+  vec4 x=x_*ns.x+ns.yyyy;
+  vec4 y=y_*ns.x+ns.yyyy;
+  vec4 h=1.0-abs(x)-abs(y);
+  vec4 b0=vec4(x.xy,y.xy);
+  vec4 b1=vec4(x.zw,y.zw);
+  vec4 s0=floor(b0)*2.0+1.0;
+  vec4 s1=floor(b1)*2.0+1.0;
+  vec4 sh=-step(h,vec4(0.0));
+  vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;
+  vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+  vec3 p0=vec3(a0.xy,h.x);
+  vec3 p1=vec3(a0.zw,h.y);
+  vec3 p2=vec3(a1.xy,h.z);
+  vec3 p3=vec3(a1.zw,h.w);
+  vec4 norm=_s3_taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+  p0*=norm.x; p1*=norm.y; p2*=norm.z; p3*=norm.w;
+  vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);
+  m=m*m;
+  return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+}
+`;
+
+/* — Rock ShaderMaterial (FBM + ridge noise for crack texture) — */
+const ROCK_VERT = /* glsl */`
+  varying vec3 vNormal;
+  varying vec3 vPosition;
+  varying float vFogDepth;
+  void main() {
+    vNormal   = normalMatrix * normal;
+    vPosition = position;
+    vec4 mv   = modelViewMatrix * vec4(position, 1.0);
+    vFogDepth = -mv.z;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const ROCK_FRAG = /* glsl */`
+  ${SNOISE3_GLSL}
+
+  uniform vec3  uAColor;
+  uniform vec3  uBColor;
+  uniform vec3  uCColor;
+  uniform vec3  uLightDir;
+  uniform vec3  uFogColor;
+  uniform float uFogDensity;
+
+  varying vec3  vNormal;
+  varying vec3  vPosition;
+  varying float vFogDepth;
+
+  float noise3(vec3 s) { return snoise3(s) * 0.5 + 0.5; }
+
+  float fbm(vec3 p, int n, float persistence) {
+    float v = 0.0, total = 0.0, amp = 1.0;
+    for (int i = 0; i < 10; i++) {
+      if (i >= n) break;
+      v += amp * noise3(p); total += amp; amp *= persistence; p *= 2.0;
+    }
+    return v / total;
+  }
+
+  float ridge(vec3 p, int n, float persistence) {
+    float v = 0.0, total = 0.0, amp = 1.0;
+    for (int i = 0; i < 10; i++) {
+      if (i >= n) break;
+      float sig = 1.0 - abs(snoise3(p));
+      sig = pow(sig, 8.0);
+      v += amp * sig; total += amp; amp *= persistence; p *= 2.0;
+    }
+    return v / total;
+  }
+
+  vec3 samplePalette(float t) {
+    if (t < 0.25) return vec3(0.0);
+    else if (t < 0.5) return mix(uAColor, uBColor, (t - 0.25) / 0.25);
+    else return mix(uBColor, uCColor, (t - 0.5) / 0.5);
+  }
+
+  void main() {
+    vec3 s    = vPosition;
+    float t   = fbm(vec3(10.0) * s, 8, 0.8);
+    vec3 diff = samplePalette(t);
+    float t1  = ridge(s, 8, 0.8);
+    float t2  = ridge(s + vec3(4343.3), 8, 0.8);
+    diff += 0.22 * t1 - 0.22 * t2;
+
+    // Lighting
+    vec3 n    = normalize(vNormal);
+    vec3 l    = normalize(uLightDir);
+    float dif = max(dot(n, l), 0.0);
+    vec3 color = diff * (vec3(0.5) + vec3(0.4) * dif);
+
+    // Fog
+    float ff  = clamp(1.0 - exp(-uFogDensity * vFogDepth), 0.0, 1.0);
+    color = mix(color, uFogColor, ff);
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+/* — Rock pool — */
+const ROCKS_PER_TREE = 3;
+const rockPool = [];
+
+// Precompute 8 prototype geometries
+const ROCK_GEOS = Array.from({ length: 8 }, (_, i) => createRockGeometry(i * 37 + 13));
+
+const ROCK_MAT = new THREE.ShaderMaterial({
+  vertexShader  : ROCK_VERT,
+  fragmentShader: ROCK_FRAG,
+  uniforms: {
+    uAColor    : { value: new THREE.Color(0.50, 0.42, 0.32) },
+    uBColor    : { value: new THREE.Color(0.60, 0.53, 0.43) },
+    uCColor    : { value: new THREE.Color(0.70, 0.66, 0.58) },
+    uLightDir  : { value: new THREE.Vector3(30, 60, -20).normalize() },
+    uFogColor  : { value: FOG_COLOR },
+    uFogDensity: { value: FOG_DENSITY },
+  },
+});
 
 function buildRockSystem(treePool) {
   for (let t = 0; t < treePool.length; t++) {
     const tree = treePool[t];
     for (let r = 0; r < ROCKS_PER_TREE; r++) {
       const angle  = Math.random() * Math.PI * 2;
-      const radius = grassCfg.spread * (0.4 + Math.random() * 0.9);
+      const radius = grassCfg.spread * (0.3 + Math.random() * 1.1);
       const lx = Math.cos(angle) * radius;
       const lz = Math.sin(angle) * radius;
-      const scale = 0.08 + Math.random() * 0.22;
+      const size = 0.07 + Math.random() * 0.18;
 
-      const proto = ROCK_PROTOS[Math.floor(Math.random() * ROCK_PROTOS.length)];
-      const mesh  = new THREE.Mesh(proto, ROCK_MAT);
-      mesh.position.set(tree.position.x + lx, scale * 0.55, tree.position.z + lz);
-      mesh.rotation.set(
-        Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.6
-      );
-      // Non-uniform scale for variety
-      mesh.scale.set(
-        scale * (0.8 + Math.random() * 0.5),
-        scale * (0.5 + Math.random() * 0.5),
-        scale * (0.8 + Math.random() * 0.5)
-      );
-      mesh.castShadow    = true;
-      mesh.receiveShadow = true;
+      const geo  = ROCK_GEOS[Math.floor(Math.random() * ROCK_GEOS.length)];
+      const mesh = new THREE.Mesh(geo, ROCK_MAT);
+      mesh.position.set(tree.position.x + lx, size * 0.48, tree.position.z + lz);
+      mesh.rotation.set(Math.random() * 0.5, Math.random() * Math.PI * 2, Math.random() * 0.5);
+      mesh.scale.setScalar(size);
+      mesh.castShadow = mesh.receiveShadow = true;
       scene.add(mesh);
       rockPool.push({ mesh, treeIdx: t, localX: lx, localZ: lz });
     }
