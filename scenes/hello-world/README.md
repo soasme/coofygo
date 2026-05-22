@@ -24,17 +24,19 @@ All parameters are optional. Combine them freely: `?level=5-l,10-r&gCount=10&gSi
 |---------|---------|-------------|
 | `level` | _(none)_ | Comma-separated list of `<seconds>-<l\|r>` tokens. Each token spawns a ruby at that elapsed time on the **l**eft or **r**ight path edge. Example: `?level=5-l,10-r,15-l,18-r` |
 
-### Grass splats
+### Grass blades
 
-| Param      | Default   | Description |
-|------------|-----------|-------------|
-| `grass`    | `1`       | Set to `0` to disable all grass splats. |
-| `gCount`   | `6`       | Number of gaussian splats placed around each tree base. |
-| `gSize`    | `1.0`     | World-space diameter of each splat quad (units). |
-| `gOpacity` | `0.82`    | Splat opacity, `0` (invisible) → `1` (fully opaque). |
-| `gColor`   | `3d8b2f`  | Base grass colour as a **hex string without `#`** (e.g. `5a9e3c`). |
-| `gSpread`  | `0.8`     | Scatter radius around the tree base (units). Larger = wider patches. |
-| `gDensity` | `8`       | Number of gaussian blobs drawn inside each splat texture. More = thicker/bushier. |
+| Param        | Default   | Description |
+|--------------|-----------|-------------|
+| `grass`      | `1`       | Set to `0` to disable all grass. |
+| `gCount`     | `80`      | Grass blades per tree. |
+| `gHeight`    | `0.55`    | Blade height in world units. |
+| `gWidth`     | `0.12`    | Blade base width in world units. |
+| `gSpread`    | `1.0`     | Scatter radius around the tree base (units). |
+| `gBase`      | `1a3d0a`  | Root/base colour, hex without `#`. |
+| `gTip`       | `6fc93a`  | Tip colour, hex without `#`. |
+| `gWind`      | `0.35`    | Wind bend strength. |
+| `gWindSpeed` | `0.8`     | Wind animation speed. |
 
 ---
 
@@ -44,16 +46,19 @@ All parameters are optional. Combine them freely: `?level=5-l,10-r&gCount=10&gSi
 |-------------|------|
 | Default forest walk, no rubies | [`/scenes/hello-world/`](http://www.soasme.com/coofygo/scenes/hello-world/) |
 | Ruby at 5 s left, 10 s right | [`?level=5-l,10-r`](http://www.soasme.com/coofygo/scenes/hello-world/?level=5-l,10-r) |
-| Dense jungle-green grass | [`?gCount=12&gSize=1.3&gDensity=14&gColor=2d7a1f`](http://www.soasme.com/coofygo/scenes/hello-world/?gCount=12&gSize=1.3&gDensity=14&gColor=2d7a1f) |
-| Light sparse grass with pale colour | [`?gCount=3&gSize=0.7&gOpacity=0.55&gColor=8fbb60`](http://www.soasme.com/coofygo/scenes/hello-world/?gCount=3&gSize=0.7&gOpacity=0.55&gColor=8fbb60) |
+| Dense tall grass | [`?gCount=150&gHeight=0.8&gWidth=0.10`](http://www.soasme.com/coofygo/scenes/hello-world/?gCount=150&gHeight=0.8&gWidth=0.10) |
+| Light sparse grass | [`?gCount=30&gHeight=0.3&gSpread=0.6`](http://www.soasme.com/coofygo/scenes/hello-world/?gCount=30&gHeight=0.3&gSpread=0.6) |
+| Autumn yellow-brown grass | [`?gBase=5c3d00&gTip=c8a020`](http://www.soasme.com/coofygo/scenes/hello-world/?gBase=5c3d00&gTip=c8a020) |
+| Strong swaying wind | [`?gWind=0.9&gWindSpeed=1.8`](http://www.soasme.com/coofygo/scenes/hello-world/?gWind=0.9&gWindSpeed=1.8) |
 | Disable grass entirely | [`?grass=0`](http://www.soasme.com/coofygo/scenes/hello-world/?grass=0) |
-| Full demo: rubies + custom grass | [`?level=5-l,10-r,15-l,20-r&gCount=8&gSize=1.2&gColor=4a9e30`](http://www.soasme.com/coofygo/scenes/hello-world/?level=5-l,10-r,15-l,20-r&gCount=8&gSize=1.2&gColor=4a9e30) |
+| Full demo: rubies + custom grass | [`?level=5-l,10-r,15-l,20-r&gCount=100&gHeight=0.65&gBase=1a3d0a&gTip=80e830`](http://www.soasme.com/coofygo/scenes/hello-world/?level=5-l,10-r,15-l,20-r&gCount=100&gHeight=0.65&gBase=1a3d0a&gTip=80e830) |
 
 ---
 
 ## Technical notes
 
-- **Grass rendering** — single `InstancedBufferGeometry` draw call for all splats across all trees. A custom GLSL billboard vertex shader keeps quads camera-facing in view space. Fragment shader applies matching `FogExp2` (density `0.035`) so splats fade with the forest.
-- **Splat texture** — procedurally generated on a `128×128` canvas: `gDensity` overlapping radial-gradient ellipses with bright centres and transparent edges, mimicking a real 2D Gaussian.  
-- **Tree pool wrapping** — grass world positions are recomputed every frame after trees teleport, keeping splats glued to their tree at zero extra draw calls.
-- **GPU preload** — all textures and shaders (including the grass `ShaderMaterial`) are compiled with `renderer.compile()` behind the loading screen, so there is no first-frame stutter.
+- **Grass rendering** — real 3-column tapered blade geometry (5 segments, curved profile) instanced across all tree bases in a single draw call. Technique adapted from [green-grass-v3.vercel.app](https://green-grass-v3.vercel.app/) (MIT). Each blade has per-instance scale, rotation, and seed attributes.
+- **Wind animation** — simplex noise (2D) samples the world XZ position + time to create organic non-uniform swaying. Bend is zero at the root and quadratic toward the tip, so roots stay pinned.
+- **Blade texture** — procedurally generated bezier leaf silhouette on a `128×128` canvas (white on black), used as an alpha mask so each blade has a natural tapered shape.
+- **Colour gradient** — GLSL mixes a dark root colour → `gBase` → `gTip` along `uv.y` with fake root AO (deep roots stay dark).
+- **Tree-pool wrapping** — grass world positions are recomputed every frame after trees teleport, keeping blades glued to their parent tree.
