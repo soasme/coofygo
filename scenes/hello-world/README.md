@@ -40,25 +40,14 @@ All parameters are optional. Combine them freely: `?level=5-l,10-r&gCount=10&gSi
 
 ## Examples
 
-```
-# Default forest walk, no rubies
-/scenes/hello-world/
-
-# Ruby at 5 s left, 10 s right
-/scenes/hello-world/?level=5-l,10-r
-
-# Dense jungle-green grass, many splats per tree
-/scenes/hello-world/?gCount=12&gSize=1.3&gDensity=14&gColor=2d7a1f
-
-# Light sparse grass with pale colour
-/scenes/hello-world/?gCount=3&gSize=0.7&gOpacity=0.55&gColor=8fbb60
-
-# Disable grass entirely
-/scenes/hello-world/?grass=0
-
-# Full demo: rubies + custom grass
-/scenes/hello-world/?level=5-l,10-r,15-l,20-r&gCount=8&gSize=1.2&gColor=4a9e30
-```
+| Description | Link |
+|-------------|------|
+| Default forest walk, no rubies | [`/scenes/hello-world/`](http://www.soasme.com/coofygo/scenes/hello-world/) |
+| Ruby at 5 s left, 10 s right | [`?level=5-l,10-r`](http://www.soasme.com/coofygo/scenes/hello-world/?level=5-l,10-r) |
+| Dense jungle-green grass | [`?gCount=12&gSize=1.3&gDensity=14&gColor=2d7a1f`](http://www.soasme.com/coofygo/scenes/hello-world/?gCount=12&gSize=1.3&gDensity=14&gColor=2d7a1f) |
+| Light sparse grass with pale colour | [`?gCount=3&gSize=0.7&gOpacity=0.55&gColor=8fbb60`](http://www.soasme.com/coofygo/scenes/hello-world/?gCount=3&gSize=0.7&gOpacity=0.55&gColor=8fbb60) |
+| Disable grass entirely | [`?grass=0`](http://www.soasme.com/coofygo/scenes/hello-world/?grass=0) |
+| Full demo: rubies + custom grass | [`?level=5-l,10-r,15-l,20-r&gCount=8&gSize=1.2&gColor=4a9e30`](http://www.soasme.com/coofygo/scenes/hello-world/?level=5-l,10-r,15-l,20-r&gCount=8&gSize=1.2&gColor=4a9e30) |
 
 ---
 
