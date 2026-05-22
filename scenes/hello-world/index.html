@@ -317,6 +317,79 @@ const GRASS_FRAG = /* glsl */`
   }
 `;
 
+/* ── Rock system ─────────────────────────────────────────────────────────
+   Procedural rocks: deformed IcosahedronGeometry, mossy-stone material.
+   ~3 rocks per tree, scattered in the grass radius. Wraps with the tree pool.
+──────────────────────────────────────────────────────────────────────── */
+const ROCKS_PER_TREE = 3;
+const rockPool = [];   // { mesh, treeIdx, localX, localZ }
+
+function makeRockMaterial() {
+  // Toon-ish stone: grey with a mossy green tint on upward faces
+  return new THREE.MeshStandardMaterial({
+    color    : 0x8a8070,
+    roughness: 0.92,
+    metalness: 0.0,
+    envMapIntensity: 0.0,
+  });
+}
+
+function makeRockGeometry(seed) {
+  // IcosahedronGeometry subdivided twice, then vertices perturbed by pseudo-random noise
+  const geo = new THREE.IcosahedronGeometry(1, 1);
+  const pos = geo.attributes.position;
+  const arr = pos.array;
+  // Per-vertex noise using a simple deterministic hash from seed + index
+  for (let i = 0; i < pos.count; i++) {
+    const x = arr[i*3], y = arr[i*3+1], z = arr[i*3+2];
+    // Hash using sin chaos
+    const h = Math.sin(seed * 127.1 + i * 311.7) * 43758.5453;
+    const noise = (h - Math.floor(h)) * 0.45 - 0.22;
+    const r = Math.sqrt(x*x + y*y + z*z) + noise;
+    const nx = x/Math.sqrt(x*x+y*y+z*z) * r;
+    const ny = y/Math.sqrt(x*x+y*y+z*z) * r;
+    const nz = z/Math.sqrt(x*x+y*y+z*z) * r;
+    arr[i*3] = nx; arr[i*3+1] = ny; arr[i*3+2] = nz;
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Build 5 prototype rock geometries, reused via clone
+const ROCK_PROTOS = Array.from({ length: 5 }, (_, i) => makeRockGeometry(i + 1));
+const ROCK_MAT = makeRockMaterial();
+
+function buildRockSystem(treePool) {
+  for (let t = 0; t < treePool.length; t++) {
+    const tree = treePool[t];
+    for (let r = 0; r < ROCKS_PER_TREE; r++) {
+      const angle  = Math.random() * Math.PI * 2;
+      const radius = grassCfg.spread * (0.4 + Math.random() * 0.9);
+      const lx = Math.cos(angle) * radius;
+      const lz = Math.sin(angle) * radius;
+      const scale = 0.08 + Math.random() * 0.22;
+
+      const proto = ROCK_PROTOS[Math.floor(Math.random() * ROCK_PROTOS.length)];
+      const mesh  = new THREE.Mesh(proto, ROCK_MAT);
+      mesh.position.set(tree.position.x + lx, scale * 0.55, tree.position.z + lz);
+      mesh.rotation.set(
+        Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.6
+      );
+      // Non-uniform scale for variety
+      mesh.scale.set(
+        scale * (0.8 + Math.random() * 0.5),
+        scale * (0.5 + Math.random() * 0.5),
+        scale * (0.8 + Math.random() * 0.5)
+      );
+      mesh.castShadow    = true;
+      mesh.receiveShadow = true;
+      scene.add(mesh);
+      rockPool.push({ mesh, treeIdx: t, localX: lx, localZ: lz });
+    }
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Build the InstancedBufferGeometry for all grass blades.
    Called once after tree pool is placed; also called again after each
@@ -457,6 +530,9 @@ async function main() {
   /* ── Build grass ─────────────────────────── */
   buildGrassSystem(treePool);
 
+  /* ── Build rocks ─────────────────────────── */
+  buildRockSystem(treePool);
+
   /* ── GPU warm-up ─────────────────────────── */
   for (const tex of [groundColorTex, groundRoughTex, groundNormalTex, pathTex]) {
     renderer.initTexture(tex);
@@ -578,6 +654,13 @@ async function main() {
       const rel  = tree.position.z - camZ;
       if (rel > CYCLE/2)  tree.position.z -= CYCLE;
       if (rel < -CYCLE/2) tree.position.z += CYCLE;
+    }
+
+    // Sync rocks with their parent trees after wrapping
+    for (const rock of rockPool) {
+      const tree = treePool[rock.treeIdx];
+      rock.mesh.position.x = tree.position.x + rock.localX;
+      rock.mesh.position.z = tree.position.z + rock.localZ;
     }
 
     // Update grass blade world positions after tree wrapping
