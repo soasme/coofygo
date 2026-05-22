@@ -76,10 +76,14 @@ sun.castShadow = true;
 scene.add(sun);
 scene.add(new THREE.AmbientLight(0xb0d8f0, 0.8));
 
-/* ── Ground ──────────────────────────────── */
+/* ── Texture loader with Promise wrapper ──── */
 const texLoader = new THREE.TextureLoader();
+const pendingTextures = [];   // track all texture loads for GPU pre-upload
+
 function loadTex(path, repeat = [12, 600]) {
-  const t = texLoader.load(path);
+  const p = new Promise((res, rej) => texLoader.load(path, res, undefined, rej));
+  pendingTextures.push(p);
+  const t = texLoader.load(path);   // second load hits browser cache instantly
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(...repeat);
   return t;
@@ -195,9 +199,11 @@ function loadGLB(url) {
 }
 
 async function main() {
-  const gltfs = await Promise.all(
-    MODEL_FILES.map(f => loadGLB(TREE_MODELS_BASE + f))
-  );
+  // Wait for all GLBs AND all textures to finish loading
+  const [gltfs] = await Promise.all([
+    Promise.all(MODEL_FILES.map(f => loadGLB(TREE_MODELS_BASE + f))),
+    Promise.all(pendingTextures),
+  ]);
 
   const prototypes = gltfs.map(g => {
     const root = g.scene;
@@ -246,6 +252,39 @@ async function main() {
       treePool.push(spawnTree(-x, z + jitter, col.scale));
     }
   }
+
+  /* ── GPU warm-up: upload textures + compile all shaders ─────── */
+  // Force texture upload for every texture now, while loading screen is up
+  for (const tex of [groundColorTex, groundRoughTex, groundNormalTex, pathTex]) {
+    renderer.initTexture(tex);
+  }
+
+  // Pre-warm ruby + particle shaders by adding hidden dummies, compiling, then removing
+  const _warmRubyMat = new THREE.MeshPhysicalMaterial({
+    color: 0xcc0022, emissive: 0x440008, roughness: 0.05, metalness: 0.0,
+    transmission: 0.5, thickness: 0.5, clearcoat: 1.0, clearcoatRoughness: 0.05,
+  });
+  const _warmRuby = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0), _warmRubyMat);
+  _warmRuby.position.set(0, -1000, 0);   // far below, never visible
+  scene.add(_warmRuby);
+
+  const _warmPtGeo = new THREE.BufferGeometry();
+  _warmPtGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+  _warmPtGeo.setAttribute('color',    new THREE.BufferAttribute(new Float32Array(3), 3));
+  const _warmPtMat = new THREE.PointsMaterial({ size: 0.18, transparent: true, vertexColors: true });
+  const _warmPts   = new THREE.Points(_warmPtGeo, _warmPtMat);
+  _warmPts.position.set(0, -1000, 0);
+  scene.add(_warmPts);
+
+  // This call compiles every shader variant in the scene synchronously
+  renderer.compile(scene, camera);
+
+  // Clean up dummies
+  scene.remove(_warmRuby);
+  _warmRubyMat.dispose();
+  scene.remove(_warmPts);
+  _warmPtGeo.dispose();
+  _warmPtMat.dispose();
 
   /* ── Hide loading screen ─────────────────── */
   const loadDiv = document.getElementById('loading');
